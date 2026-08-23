@@ -21,7 +21,7 @@ pub struct MeasuredFont {
 }
 
 impl MeasuredFont {
-    fn load(path: &Path) -> Result<Self, String> {
+    pub(crate) fn load(path: &Path) -> Result<Self, String> {
         let data: std::sync::Arc<[u8]> = std::fs::read(path)
             .map_err(|e| format!("no se pudo leer {}: {e}", path.display()))?
             .into();
@@ -132,30 +132,57 @@ impl Fonts {
     }
 }
 
-/// Imágenes del directorio de assets, decodificadas una vez por lote.
+/// Imágenes decodificadas una vez por lote: dos raíces separadas —
+/// `assets` (marca: membrete, templates) e `inputs` (archivos del job que
+/// el caller escribe y limpia: fotos). PNG y JPEG.
 pub struct ImageCache {
-    dir: PathBuf,
-    cache: HashMap<String, Option<krilla::image::Image>>,
+    assets_dir: PathBuf,
+    input_dir: Option<PathBuf>,
+    cache: HashMap<(ImageRoot, String), Option<krilla::image::Image>>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum ImageRoot {
+    Assets,
+    Input,
 }
 
 impl ImageCache {
-    pub fn new(dir: PathBuf) -> Self {
+    pub fn new(assets_dir: PathBuf, input_dir: Option<PathBuf>) -> Self {
         Self {
-            dir,
+            assets_dir,
+            input_dir,
             cache: HashMap::new(),
         }
     }
 
-    /// None si el archivo no existe o no es un PNG válido (el caller decide si
-    /// es fatal: el membrete es opcional, un template de carnet quizá no).
-    pub fn get(&mut self, file: &str) -> Option<krilla::image::Image> {
+    /// None si el archivo no existe o no decodifica (el caller decide si es
+    /// fatal: el membrete es opcional, una foto puede caer a respaldo).
+    pub fn get(&mut self, root: ImageRoot, file: &str) -> Option<krilla::image::Image> {
         self.cache
-            .entry(file.to_owned())
+            .entry((root, file.to_owned()))
             .or_insert_with(|| {
-                let data = std::fs::read(self.dir.join(file)).ok()?;
-                krilla::image::Image::from_png(data.into(), true).ok()
+                let dir = match root {
+                    ImageRoot::Assets => &self.assets_dir,
+                    ImageRoot::Input => self.input_dir.as_ref()?,
+                };
+                let data = std::fs::read(dir.join(file)).ok()?;
+                let data: krilla::Data = data.into();
+                krilla::image::Image::from_png(data.clone(), true)
+                    .or_else(|_| krilla::image::Image::from_jpeg(data, true))
+                    .ok()
             })
             .clone()
+    }
+
+    /// Atajo para imágenes de marca (membrete, template de carnet).
+    pub fn asset(&mut self, file: &str) -> Option<krilla::image::Image> {
+        self.get(ImageRoot::Assets, file)
+    }
+
+    /// Atajo para archivos de entrada del job (fotos).
+    pub fn input(&mut self, file: &str) -> Option<krilla::image::Image> {
+        self.get(ImageRoot::Input, file)
     }
 }
 

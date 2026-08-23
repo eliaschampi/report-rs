@@ -40,7 +40,7 @@ fn run() -> Result<ExitCode, ManifestError> {
 
     let manifest = protocol::parse_manifest(&input)?;
     let fonts = Fonts::load(&manifest.assets_dir)?;
-    let mut images = ImageCache::new(manifest.assets_dir.clone());
+    let mut images = ImageCache::new(manifest.assets_dir.clone(), manifest.input_dir.clone());
 
     let mut results = Vec::with_capacity(manifest.documents.len());
     for document in &manifest.documents {
@@ -85,18 +85,19 @@ fn render_document(
                 let letterhead = payload
                     .letterhead
                     .as_deref()
-                    .and_then(|file| images.get(file));
+                    .and_then(|file| images.asset(file));
                 render::attendance_daily::render(&payload, fonts, letterhead.as_ref())
             }
             Err(error) => Err(error),
         },
-        DocumentKind::StudentCard => match document.card_payload() {
+        DocumentKind::StudentCard | DocumentKind::EmployeeCard => match document.card_payload() {
             Ok(payload) => {
                 let template = payload
                     .template
                     .as_deref()
-                    .and_then(|file| images.get(file));
-                render::card::render(&payload, fonts, template.as_ref())
+                    .and_then(|file| images.asset(file));
+                let photo = payload.photo.as_deref().and_then(|file| images.input(file));
+                render::card::render(&payload, &fonts.sans, template.as_ref(), photo.as_ref())
             }
             Err(error) => Err(error),
         },

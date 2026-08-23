@@ -14,8 +14,13 @@ pub const MAX_BATCH_DOCUMENTS: usize = 16;
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
     pub protocol_version: u32,
-    /// Directorio con fuentes (assets/fonts) e imágenes (membrete, templates).
+    /// Directorio con fuentes (assets/fonts) e imágenes de marca (membrete,
+    /// templates).
     pub assets_dir: PathBuf,
+    /// Directorio con archivos de entrada del job (p. ej. la foto del
+    /// carnet): el caller lo crea con modo 0700 y lo limpia en `finally`.
+    #[serde(default)]
+    pub input_dir: Option<PathBuf>,
     pub documents: Vec<DocumentSpec>,
 }
 
@@ -38,6 +43,7 @@ pub enum DocumentKind {
     PaymentTicket,
     AttendanceDailyReport,
     StudentCard,
+    EmployeeCard,
 }
 
 impl DocumentSpec {
@@ -71,8 +77,21 @@ impl DocumentSpec {
         self.typed_payload(DocumentKind::AttendanceDailyReport)
     }
 
-    pub fn card_payload(&self) -> Result<StudentCardPayload, (ErrorCode, String)> {
-        self.typed_payload(DocumentKind::StudentCard)
+    /// Carnet de identidad: alumno y personal comparten payload/renderizador.
+    pub fn card_payload(&self) -> Result<IdentityCardPayload, (ErrorCode, String)> {
+        if !matches!(
+            self.kind,
+            DocumentKind::StudentCard | DocumentKind::EmployeeCard
+        ) {
+            return Err((
+                ErrorCode::PayloadInvalid,
+                format!(
+                    "kind {} no corresponde a un carnet de identidad",
+                    self.kind.as_str()
+                ),
+            ));
+        }
+        self.typed_payload(self.kind)
     }
 }
 
@@ -82,6 +101,7 @@ impl DocumentKind {
             DocumentKind::PaymentTicket => "payment_ticket",
             DocumentKind::AttendanceDailyReport => "attendance_daily_report",
             DocumentKind::StudentCard => "student_card",
+            DocumentKind::EmployeeCard => "employee_card",
         }
     }
 }
@@ -194,18 +214,26 @@ pub struct EmptyState {
     pub subtitle: String,
 }
 
+/// Carnet CR80 de identidad: alumno (`student_card`) y personal
+/// (`employee_card`) comparten renderizador; el kind distingue el semántico.
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-pub struct StudentCardPayload {
-    /// PNG template CR80 dentro de assets_dir (opcional: sin él se dibuja
-    /// fondo blanco con borde, para pruebas sin el asset de marca).
+pub struct IdentityCardPayload {
+    /// PNG template CR80 dentro de assets_dir (opcional: sin él, fondo blanco).
     #[serde(default)]
     pub template: Option<String>,
+    /// Foto PNG/JPEG dentro de input_dir (opcional: sin ella, panel de respaldo).
+    #[serde(default)]
+    pub photo: Option<String>,
     pub full_name: String,
-    pub student_code: String,
-    pub document_label: String,
-    pub document_value: String,
     pub qr_text: String,
+    pub code_text: String,
+    /// 13 para roll codes de alumno, 5.5 para números de personal.
+    pub code_font_size: f64,
+    #[serde(default)]
+    pub space_code_characters: bool,
+    #[serde(default)]
+    pub details: Vec<String>,
     #[serde(default)]
     pub meta_title: Option<String>,
     #[serde(default)]
