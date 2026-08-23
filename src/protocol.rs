@@ -14,7 +14,7 @@ pub const MAX_BATCH_DOCUMENTS: usize = 16;
 #[serde(deny_unknown_fields)]
 pub struct Manifest {
     pub protocol_version: u32,
-    /// Directorio con las fuentes (LiberationMono-{Regular,Bold}.ttf) y assets.
+    /// Directorio con fuentes (assets/fonts) e imágenes (membrete, templates).
     pub assets_dir: PathBuf,
     pub documents: Vec<DocumentSpec>,
 }
@@ -27,25 +27,63 @@ pub struct DocumentSpec {
     pub kind: DocumentKind,
     /// El PDF se escribe aquí; el caller es dueño del ciclo de vida del archivo.
     pub out_path: PathBuf,
-    pub payload: TicketPayload,
+    /// Payload sin tipar aquí: se deserializa al tipo de `kind` con
+    /// `deny_unknown_fields` en cada acceso (`ticket_payload` etc.).
+    pub payload: serde_json::Value,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum DocumentKind {
     PaymentTicket,
+    AttendanceDailyReport,
+    StudentCard,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-pub struct TicketPayload {
-    pub rows: Vec<TicketRow>,
-    #[serde(default)]
-    pub meta_title: Option<String>,
-    #[serde(default)]
-    pub meta_author: Option<String>,
-    #[serde(default)]
-    pub meta_subject: Option<String>,
+impl DocumentSpec {
+    fn typed_payload<T: serde::de::DeserializeOwned>(
+        &self,
+        expected: DocumentKind,
+    ) -> Result<T, (ErrorCode, String)> {
+        if self.kind != expected {
+            return Err((
+                ErrorCode::PayloadInvalid,
+                format!(
+                    "kind {} no corresponde a este payload (esperado {})",
+                    self.kind.as_str(),
+                    expected.as_str()
+                ),
+            ));
+        }
+        serde_json::from_value(self.payload.clone()).map_err(|e| {
+            (
+                ErrorCode::PayloadInvalid,
+                format!("payload no cumple el contrato: {e}"),
+            )
+        })
+    }
+
+    pub fn ticket_payload(&self) -> Result<TicketPayload, (ErrorCode, String)> {
+        self.typed_payload(DocumentKind::PaymentTicket)
+    }
+
+    pub fn report_payload(&self) -> Result<AttendanceDailyPayload, (ErrorCode, String)> {
+        self.typed_payload(DocumentKind::AttendanceDailyReport)
+    }
+
+    pub fn card_payload(&self) -> Result<StudentCardPayload, (ErrorCode, String)> {
+        self.typed_payload(DocumentKind::StudentCard)
+    }
+}
+
+impl DocumentKind {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            DocumentKind::PaymentTicket => "payment_ticket",
+            DocumentKind::AttendanceDailyReport => "attendance_daily_report",
+            DocumentKind::StudentCard => "student_card",
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
@@ -72,6 +110,108 @@ pub struct TicketRow {
     pub separator: bool,
     #[serde(default)]
     pub gap_after: f64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TicketPayload {
+    pub rows: Vec<TicketRow>,
+    #[serde(default)]
+    pub meta_title: Option<String>,
+    #[serde(default)]
+    pub meta_author: Option<String>,
+    #[serde(default)]
+    pub meta_subject: Option<String>,
+}
+
+/// Paleta cerrada del membrete de marca (los colores no viajan por el
+/// manifest: son constantes de la identidad, no contenido).
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PaletteColor {
+    #[default]
+    Text,
+    Muted,
+    Success,
+    Warning,
+    Danger,
+    Info,
+    Accent,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AttendanceDailyPayload {
+    pub title: String,
+    pub subtitle: String,
+    pub summary: Vec<SummaryItem>,
+    pub columns: Vec<ColumnSpec>,
+    #[serde(default)]
+    pub rows: Vec<Vec<Cell>>,
+    /// Estado vacío obligatorio si `rows` viene vacío.
+    pub empty: Option<EmptyState>,
+    /// PNG dentro de assets_dir usado como fondo de página (opcional).
+    #[serde(default)]
+    pub letterhead: Option<String>,
+    #[serde(default)]
+    pub meta_title: Option<String>,
+    #[serde(default)]
+    pub meta_author: Option<String>,
+    #[serde(default)]
+    pub meta_subject: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct SummaryItem {
+    pub label: String,
+    pub value: String,
+    #[serde(default)]
+    pub color: PaletteColor,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ColumnSpec {
+    pub label: String,
+    pub width: f64,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct Cell {
+    pub text: String,
+    #[serde(default)]
+    pub bold: bool,
+    #[serde(default)]
+    pub color: PaletteColor,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct EmptyState {
+    pub title: String,
+    pub subtitle: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct StudentCardPayload {
+    /// PNG template CR80 dentro de assets_dir (opcional: sin él se dibuja
+    /// fondo blanco con borde, para pruebas sin el asset de marca).
+    #[serde(default)]
+    pub template: Option<String>,
+    pub full_name: String,
+    pub student_code: String,
+    pub document_label: String,
+    pub document_value: String,
+    pub qr_text: String,
+    #[serde(default)]
+    pub meta_title: Option<String>,
+    #[serde(default)]
+    pub meta_author: Option<String>,
+    #[serde(default)]
+    pub meta_subject: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -186,6 +326,13 @@ mod tests {
         )
     }
 
+    fn report_document(id: &str, row: &str) -> String {
+        let columns = r#"{"label":"Alumno","width":100}"#;
+        format!(
+            r#"{{"id":"{id}","kind":"attendance_daily_report","out_path":"o.pdf","payload":{{"title":"T","subtitle":"S","summary":[{{"label":"A","value":"B"}}],"columns":[{columns}],"rows":[{row}]}}}}"#
+        )
+    }
+
     #[test]
     fn rejects_unknown_fields() {
         let raw = r#"{"protocol_version":1,"assets_dir":"a","documents":[],"extra":1}"#;
@@ -194,7 +341,7 @@ mod tests {
 
     #[test]
     fn rejects_wrong_version_and_empty_batch() {
-        let raw = r#"{"protocol_version":2,"assets_dir":"a","documents":[{"id":"x","kind":"payment_ticket","out_path":"x.pdf","payload":{"rows":[]}}]}"#;
+        let raw = r#"{"protocol_version":2,"assets_dir":"a","documents":[]}"#;
         assert!(parse_manifest(raw).is_err());
         assert!(parse_manifest(&manifest_json("")).is_err());
     }
@@ -206,11 +353,33 @@ mod tests {
     }
 
     #[test]
-    fn accepts_valid_manifest() {
-        let doc = ticket_document("a", "a.pdf");
-        let manifest = parse_manifest(&manifest_json(&doc)).unwrap();
-        assert_eq!(manifest.documents.len(), 1);
+    fn accepts_valid_manifests() {
+        let manifest = parse_manifest(&manifest_json(&ticket_document("a", "a.pdf"))).unwrap();
         assert_eq!(manifest.documents[0].kind, DocumentKind::PaymentTicket);
+        assert!(manifest.documents[0].ticket_payload().is_ok());
+
+        let row = r#"[{"text":"Valeria","bold":true}]"#;
+        let manifest = parse_manifest(&manifest_json(&report_document("r", row))).unwrap();
+        assert_eq!(
+            manifest.documents[0].kind,
+            DocumentKind::AttendanceDailyReport
+        );
+        assert_eq!(
+            manifest.documents[0].report_payload().unwrap().rows.len(),
+            1
+        );
+    }
+
+    #[test]
+    fn rejects_payload_unknown_fields_and_wrong_kind() {
+        let raw = r#"{"id":"x","kind":"payment_ticket","out_path":"o.pdf","payload":{"rows":[],"extra":1}}"#;
+        let manifest = parse_manifest(&manifest_json(raw)).unwrap();
+        assert!(manifest.documents[0].ticket_payload().is_err());
+
+        // payload de reporte bajo kind de ticket: tipos cruzados → error
+        let row = r#"{"text":"V"}"#;
+        let manifest = parse_manifest(&manifest_json(&report_document("x", row))).unwrap();
+        assert!(manifest.documents[0].ticket_payload().is_err());
     }
 
     #[test]

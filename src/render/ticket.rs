@@ -4,14 +4,13 @@
 
 use krilla::Document;
 use krilla::color::rgb;
-use krilla::geom::{PathBuilder, Point};
+use krilla::geom::PathBuilder;
 use krilla::metadata::Metadata;
 use krilla::page::PageSettings;
-use krilla::paint::{Fill, Stroke};
-use krilla::text::TextDirection;
+use krilla::paint::Stroke;
 
-use crate::protocol::{Align, TicketPayload, TicketRow};
-use crate::text::{FontPair, wrap};
+use crate::protocol::{Align, ErrorCode, TicketPayload, TicketRow};
+use crate::text::{FontPair, solid_fill, wrap};
 
 // Constantes físicas del formato térmico 80 mm (idénticas al TS).
 pub const WIDTH: f64 = 226.77;
@@ -22,8 +21,8 @@ const MIN_HEIGHT: f64 = 240.0;
 const TOP_PAD: f64 = 20.0;
 const BASE_HEIGHT: f64 = 34.0;
 
-const TEXT_COLOR: (u8, u8, u8) = (20, 20, 20);
-const RULE_COLOR: (u8, u8, u8) = (89, 89, 89);
+const TEXT_COLOR: (f32, f32, f32) = (0.08, 0.08, 0.08);
+const RULE_COLOR: (f32, f32, f32) = (0.35, 0.35, 0.35);
 
 fn wrapped_rows(rows: &[TicketRow], fonts: &FontPair) -> Vec<TicketRow> {
     let mut out = Vec::with_capacity(rows.len());
@@ -69,9 +68,7 @@ fn x_for(text_width: f64, align: Align) -> f64 {
 pub fn render(
     payload: &TicketPayload,
     fonts: &FontPair,
-) -> Result<(Vec<u8>, u32), (crate::protocol::ErrorCode, String)> {
-    use crate::protocol::ErrorCode;
-
+) -> Result<(Vec<u8>, u32), (ErrorCode, String)> {
     for (index, row) in payload.rows.iter().enumerate() {
         if let Some(size) = row.size
             && !(0.0..200.0).contains(&size)
@@ -120,12 +117,14 @@ pub fn render(
     let mut page = document.start_page_with(settings);
     let mut surface = page.surface();
 
-    let text_fill = Fill {
-        paint: rgb::Color::new(TEXT_COLOR.0, TEXT_COLOR.1, TEXT_COLOR.2).into(),
-        ..Default::default()
-    };
+    let text_fill = solid_fill(TEXT_COLOR);
     let rule_stroke = Stroke {
-        paint: rgb::Color::new(RULE_COLOR.0, RULE_COLOR.1, RULE_COLOR.2).into(),
+        paint: rgb::Color::new(
+            (RULE_COLOR.0 * 255.0) as u8,
+            (RULE_COLOR.1 * 255.0) as u8,
+            (RULE_COLOR.2 * 255.0) as u8,
+        )
+        .into(),
         width: 0.5,
         ..Default::default()
     };
@@ -151,14 +150,7 @@ pub fn render(
             let x = x_for(font.width(text, size), row.align);
             surface.set_fill(Some(text_fill.clone()));
             surface.set_stroke(None);
-            surface.draw_text(
-                Point::from_xy(x as f32, (height - y) as f32),
-                font.krilla_font(),
-                size as f32,
-                text,
-                false,
-                TextDirection::Auto,
-            );
+            font.draw_line(&mut surface, text, size, x, height - y);
         }
         y -= LINE_HEIGHT + row.gap_after;
     }

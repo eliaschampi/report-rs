@@ -7,7 +7,12 @@ license = "MIT"
 description = "Deterministic PDF report engine: one JSON manifest in, one JSON response out"
 
 [dependencies]
-krilla = "0.8.2"
+# raster-images: PNG/JPEG embed (membrete, fotos, templates).
+# simple-text (rustybuzz) desactivado a propósito: los runs de glifos se
+# posicionan con ttf-parser (métricas idénticas a las usadas para wrap) —
+# mismo modelo que pdf-lib con fuentes estándar, y −1 MB de binario.
+krilla = { version = "0.8.2", default-features = false, features = ["raster-images"] }
+qrcodegen = "1.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 ttf-parser = "0.25"

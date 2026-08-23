@@ -6,35 +6,58 @@ corrido (errores por ítem permitidos), exit 2 = manifest inservible.
 
 ## Estado
 
-**Spike / R0-R1 (payment_ticket)** — demostrador de viabilidad con métricas
-medidas. Falta: kinds A4, carnets, integración en coedula (`report-engine.service.ts`),
-CI, tests de contrato end-to-end.
+**R2 completo + sonda R3.** Kinds: `payment_ticket` (80 mm), 
+`attendance_daily_report` (A4 kernel completo: membrete, summary, tablas
+zebra, paginación con header repetido, estado vacío) y `student_card`
+(sonda CR80: template + QR vectorial + texto rotado; posiciones de PRUEBA,
+el mapeo px→pt real es R3). Falta: `student_attendance_report`,
+`student_evaluation_report`, `employee_card`, integración en coedula
+(`report-engine.service.ts`), CI, tests de contrato end-to-end.
 
 ```
 ~/Documents/report-rs
-├── assets/fonts/          LiberationMono-{Regular,Bold}.ttf (embebidas por subset)
-├── docs/protocol.md       contrato v1 (borrador congelado para el spike)
+├── assets/
+│   ├── fonts/             LiberationMono + LiberationSans (Regular/Bold)
+│   ├── membrete.png       ← colocar (gitignored, asset de marca)
+│   └── card.png           ← colocar (gitignored, asset de marca)
+├── docs/protocol.md       contrato v1
 └── src/
-    ├── main.rs            frontera de proceso, exit codes
-    ├── protocol.rs        serde estricto, deny_unknown_fields, echo de id
-    ├── text.rs            medición + wrap/fit (el ÚNICO motor de texto)
-    └── render/ticket.rs   payment_ticket 80mm, altura variable
+    ├── main.rs            frontera de proceso, dispatch por kind, exit codes
+    ├── protocol.rs        serde estricto, payload tipado por kind, echo de id
+    ├── text.rs            medición + wrap/fit + runs de glifos (único motor)
+    └── render/
+        ├── a4.rs          kernel A4 (puerto de pdf-a4-report.service.ts)
+        ├── attendance_daily.rs
+        ├── card.rs        sonda CR80
+        └── ticket.rs      ticket térmico
 ```
 
-## Métricas medidas (M1/M2 MacBook, release, rustc 1.98)
+## Métricas medidas (M1/M2 MacBook, release, rustc 1.98, krilla 0.8.2)
 
-| Escenario | p50 | p95 | Nota |
+| Documento | pdf-lib (baseline, bloquea event loop) | report-rs render interno | report-rs spawn completo |
 |---|---|---|---|
-| Render interno 1 ticket | 1.5 ms | 2.2 ms | steady state, fuentes ya cargadas |
-| Spawn completo, 1 ticket | 6.9 ms | 7.6 ms | ciclo de vida entero del proceso, off-event-loop |
-| Spawn completo, 16 tickets | 31 ms | 32 ms | 1.9 ms/ticket amortizado |
-| Determinismo | bytes idénticos entre corridas | | requisito del patrón |
-| Salida | 22.8 KB/ticket | | pdf-lib: 1.9 KB (no embebe fuentes; sin UTF-8) |
+| Ticket 80 mm | p50 0.84 ms | p50 1.5 ms | p50 6.9 ms (off-loop) |
+| A4 asistencia, 100 filas + membrete | **p50 217 ms** (178 ms = PNG del membrete en JS) | **p50 7.8 ms** (28×) | 31 ms lote de 4 |
+| Carnet CR80 (template + QR + rotado) | sin baseline | p50 2.6 ms (48 ms el 1.º: decodifica template) | 8.9 ms/card amortizado |
 
-Baseline pdf-lib medido el mismo día (código de producción replicado):
-ticket p50 0.84 ms in-process (bloquea el event loop); reporte A4 100 filas
-p50 **217 ms** in-process (178 ms de ellos son el `embedPng` del membrete
-decodificado en JS puro). Ver `docs/parity.md` cuando exista.
+- Determinismo: **bytes idénticos entre corridas** (verificado con `cmp`).
+- Salida: ticket 22.8 KB / A4-100filas 261 KB (7 págs) / carnet 234 KB —
+  fuentes embebidas por subset (UTF-8 completo; pdf-lib no embebe y lanza
+  con glifos fuera de WinAnsi).
+- Binario: **2.15 MB** release (LTO, strip). Sin rustybuzz: los runs de
+  glifos se posicionan con ttf-parser (ver abajo).
+
+## Por qué pesa el binario (y por qué no rustybuzz)
+
+`cargo tree`: krilla (pdf-writer + subsetter + tiny-skia-path + png/zune-jpeg/
+gif/webp decoders vía feature `raster-images`) + ttf-parser + serde + qrcodegen.
+El feature default `simple-text` de krilla trae **rustybuzz** (shaping
+tipográfico completo): lo desactivamos — `default-features = false,
+features = ["raster-images"]` — y posicionamos glifos con las mismas métricas
+ttf-parser con las que medimos el wrap (modelo idéntico a pdf-lib). Ahorro
+medido: 2.72 MB → 2.15 MB (−21 %) aunque el binario ahora hace más cosas.
+Traer rustybuzz de vuelta sería 1 línea si algún kind necesita shaping real
+(árabe, unión de scripts).
 
 ## Uso
 

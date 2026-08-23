@@ -16,7 +16,7 @@ use std::time::Instant;
 use protocol::{
     BatchResponse, ErrorCode, ItemError, ItemResult, ManifestError, Outcome, PROTOCOL_VERSION,
 };
-use text::FontPair;
+use text::{Fonts, ImageCache};
 
 const MAX_STDIN_BYTES: usize = 16 * 1024 * 1024;
 
@@ -39,12 +39,13 @@ fn run() -> Result<ExitCode, ManifestError> {
         .map_err(|e| ManifestError(format!("no se pudo leer stdin: {e}")))?;
 
     let manifest = protocol::parse_manifest(&input)?;
-    let fonts = FontPair::load(&manifest.assets_dir)?;
+    let fonts = Fonts::load(&manifest.assets_dir)?;
+    let mut images = ImageCache::new(manifest.assets_dir.clone());
 
     let mut results = Vec::with_capacity(manifest.documents.len());
     for document in &manifest.documents {
         let started = Instant::now();
-        let outcome = render_document(document, &fonts);
+        let outcome = render_document(document, &fonts, &mut images);
         let elapsed_ms = started.elapsed().as_secs_f64() * 1000.0;
         match &outcome {
             Outcome::Ok { bytes, .. } => eprintln!(
@@ -67,11 +68,38 @@ fn run() -> Result<ExitCode, ManifestError> {
     })
 }
 
-fn render_document(document: &protocol::DocumentSpec, fonts: &FontPair) -> Outcome {
+fn render_document(
+    document: &protocol::DocumentSpec,
+    fonts: &Fonts,
+    images: &mut ImageCache,
+) -> Outcome {
     use protocol::DocumentKind;
 
     let rendered = match document.kind {
-        DocumentKind::PaymentTicket => render::ticket::render(&document.payload, fonts),
+        DocumentKind::PaymentTicket => match document.ticket_payload() {
+            Ok(payload) => render::ticket::render(&payload, &fonts.mono),
+            Err(error) => Err(error),
+        },
+        DocumentKind::AttendanceDailyReport => match document.report_payload() {
+            Ok(payload) => {
+                let letterhead = payload
+                    .letterhead
+                    .as_deref()
+                    .and_then(|file| images.get(file));
+                render::attendance_daily::render(&payload, fonts, letterhead.as_ref())
+            }
+            Err(error) => Err(error),
+        },
+        DocumentKind::StudentCard => match document.card_payload() {
+            Ok(payload) => {
+                let template = payload
+                    .template
+                    .as_deref()
+                    .and_then(|file| images.get(file));
+                render::card::render(&payload, fonts, template.as_ref())
+            }
+            Err(error) => Err(error),
+        },
     };
     let (bytes, pages) = match rendered {
         Ok(rendered) => rendered,
